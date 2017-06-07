@@ -22,6 +22,17 @@ namespace SocketsSample
                 .ConfigureLogging(factory =>
                 {
                     factory.AddConsole();
+                    factory.AddDebug();
+                    factory.SetMinimumLevel(LogLevel.Trace);
+                    factory.AddFilter((c, l) =>
+                    {
+                        if (c.Contains("Socket") || c.Contains("SignalR"))
+                        {
+                            return true;
+                        }
+
+                        return false;
+                    });
                 })
                 .UseKestrel()
                 .UseContentRoot(Directory.GetCurrentDirectory())

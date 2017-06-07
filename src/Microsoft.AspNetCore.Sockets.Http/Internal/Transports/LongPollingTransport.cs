@@ -7,10 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Channels;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Sockets.Internal.Formatters;
 using Microsoft.Extensions.Logging;
 
-namespace Microsoft.AspNetCore.Sockets.Transports
+namespace Microsoft.AspNetCore.Sockets.Internal.Transports
 {
     public class LongPollingTransport : IHttpTransport
     {
@@ -30,7 +29,7 @@ namespace Microsoft.AspNetCore.Sockets.Transports
                 if (!await _application.WaitToReadAsync(token))
                 {
                     await _application.Completion;
-                    _logger.LogInformation("Terminating Long Polling connection by sending 204 response.");
+                    _logger.LongPolling204(context.TraceIdentifier);
                     context.Response.StatusCode = StatusCodes.Status204NoContent;
                     return;
                 }
@@ -46,7 +45,7 @@ namespace Microsoft.AspNetCore.Sockets.Transports
                     contentLength += buffer.Length;
                     buffers.Add(buffer);
 
-                    _logger.LogDebug("Writing {0} byte message to response", buffer.Length);
+                    _logger.WritingMessage(buffer.Length, context.TraceIdentifier);
                 }
 
                 context.Response.ContentLength = contentLength;
@@ -60,18 +59,18 @@ namespace Microsoft.AspNetCore.Sockets.Transports
             {
                 if (!context.RequestAborted.IsCancellationRequested)
                 {
-                    _logger.LogInformation("Terminating Long Polling connection by sending 204 response.");
+                    _logger.LongPolling204(context.TraceIdentifier);
                     context.Response.StatusCode = StatusCodes.Status204NoContent;
                     throw;
                 }
 
                 // Don't count this as cancellation, this is normal as the poll can end due to the browesr closing.
                 // The background thread will eventually dispose this connection if it's inactive
-                _logger.LogDebug("Client disconnected from Long Polling endpoint.");
+                _logger.LongPollingDisconnected(context.TraceIdentifier);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Long Polling transport was terminated due to an error");
+                _logger.LongPollingTerminated(context.TraceIdentifier, ex);
                 throw;
             }
         }

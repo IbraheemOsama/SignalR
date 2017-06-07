@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Sockets.Internal;
-using Microsoft.AspNetCore.Sockets.Transports;
+using Microsoft.AspNetCore.Sockets.Internal.Transports;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using Newtonsoft.Json;
@@ -75,6 +75,8 @@ namespace Microsoft.AspNetCore.Sockets
                     return;
                 }
 
+                _logger.EstablishedConnection(connection.ConnectionId, context.TraceIdentifier);
+
                 if (!await EnsureConnectionStateAsync(connection, context, TransportType.ServerSentEvents, supportedTransports))
                 {
                     // Bad connection state. It's already set the response status code.
@@ -95,6 +97,8 @@ namespace Microsoft.AspNetCore.Sockets
                     // No such connection, GetOrCreateConnection already set the response status code
                     return;
                 }
+
+                _logger.EstablishedConnection(connection.ConnectionId, context.TraceIdentifier);
 
                 if (!await EnsureConnectionStateAsync(connection, context, TransportType.WebSockets, supportedTransports))
                 {
@@ -130,7 +134,7 @@ namespace Microsoft.AspNetCore.Sockets
 
                     if (connection.Status == DefaultConnectionContext.ConnectionStatus.Disposed)
                     {
-                        _logger.LogDebug("Connection {connectionId} was disposed,", connection.ConnectionId);
+                        _logger.ConnectionDisposed(connection.ConnectionId);
 
                         // The connection was disposed
                         context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -139,7 +143,7 @@ namespace Microsoft.AspNetCore.Sockets
 
                     if (connection.Status == DefaultConnectionContext.ConnectionStatus.Active)
                     {
-                        _logger.LogDebug("Connection {connectionId} is already active via {requestId}. Cancelling previous request.", connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
+                        _logger.ConnectionAlreadyActive(connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
 
                         using (connection.Cancellation)
                         {
@@ -153,10 +157,10 @@ namespace Microsoft.AspNetCore.Sockets
                             }
                             catch (OperationCanceledException)
                             {
-                                // Should be a cancelled task
+                                // Should be a canceled task
                             }
 
-                            _logger.LogDebug("Previous poll cancelled for {connectionId} on {requestId}.", connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
+                            _logger.PollCanceled(connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
                         }
                     }
 
@@ -166,7 +170,7 @@ namespace Microsoft.AspNetCore.Sockets
                     // Raise OnConnected for new connections only since polls happen all the time
                     if (connection.ApplicationTask == null)
                     {
-                        _logger.LogDebug("Establishing new connection: {connectionId} on {requestId}", connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
+                        _logger.EstablishedConnection(connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
 
                         connection.Metadata[ConnectionMetadataNames.Transport] = TransportType.LongPolling;
 
@@ -174,7 +178,7 @@ namespace Microsoft.AspNetCore.Sockets
                     }
                     else
                     {
-                        _logger.LogDebug("Resuming existing connection: {connectionId} on {requestId}", connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
+                        _logger.ResumingConnection(connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
                     }
 
                     var longPolling = new LongPollingTransport(connection.Application.Input, _loggerFactory);
@@ -263,7 +267,7 @@ namespace Microsoft.AspNetCore.Sockets
 
                 if (connection.Status == DefaultConnectionContext.ConnectionStatus.Disposed)
                 {
-                    _logger.LogDebug("Connection {connectionId} was disposed,", connection.ConnectionId);
+                    _logger.ConnectionDisposed(connection.ConnectionId);
 
                     // Connection was disposed
                     context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -273,7 +277,7 @@ namespace Microsoft.AspNetCore.Sockets
                 // There's already an active request
                 if (connection.Status == DefaultConnectionContext.ConnectionStatus.Active)
                 {
-                    _logger.LogDebug("Connection {connectionId} is already active via {requestId}.", connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
+                    _logger.ConnectionAlreadyActive(connection.ConnectionId, connection.GetHttpContext().TraceIdentifier);
 
                     // Reject the request with a 409 conflict
                     context.Response.StatusCode = StatusCodes.Status409Conflict;
@@ -322,6 +326,8 @@ namespace Microsoft.AspNetCore.Sockets
 
             // Get the bytes for the connection id
             var negotiateResponseBuffer = Encoding.UTF8.GetBytes(GetNegotiatePayload(connection.ConnectionId, options));
+
+            _logger.NegotiationRequest(connection.ConnectionId);
 
             // Write it out to the response with the right content length
             context.Response.ContentLength = negotiateResponseBuffer.Length;
@@ -376,6 +382,7 @@ namespace Microsoft.AspNetCore.Sockets
                 buffer = stream.ToArray();
             }
 
+            _logger.ReceivedBytes(buffer.Length, connection.ConnectionId);
             while (!connection.Application.Output.TryWrite(buffer))
             {
                 if (!await connection.Application.Output.WaitToWriteAsync())
@@ -390,6 +397,7 @@ namespace Microsoft.AspNetCore.Sockets
             if ((supportedTransports & transportType) == 0)
             {
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
+                _logger.TransportNotSupported(transportType, connection.ConnectionId);
                 await context.Response.WriteAsync($"{transportType} transport not supported by this end point type");
                 return false;
             }
@@ -403,6 +411,7 @@ namespace Microsoft.AspNetCore.Sockets
             else if (transport != transportType)
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                _logger.CannotChangeTransport(transport.Value, transportType, connection.ConnectionId);
                 await context.Response.WriteAsync("Cannot change transports mid-connection");
                 return false;
             }
